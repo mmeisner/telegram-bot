@@ -1,0 +1,11 @@
+# IDEs
+.idea/
+.vscode/
+cscope.out
+
+# Misc
+*.log
+*~
+*.tar
+*.gz
+*.bz2
