@@ -1,0 +1,14 @@
+#!/bin/sh
+# show known MAC addresses
+
+. /usr/lib/telegram/helpers
+
+dhcphostfile=$(uci -q get dhcp.@dnsmasq[0].dhcphostsfile)
+if [ -r "${dhcphostfiles}" ]; then
+    md_eval "cat ${dhcphostfile}"
+fi
+
+readethers=$(uci -q get dhcp.@dnsmasq[0].readethers)
+if [ "${readethers}" = "1" ] && [ -r /etc/ethers ]; then
+    md_eval "cat ${dhcphostfile}"
+fi

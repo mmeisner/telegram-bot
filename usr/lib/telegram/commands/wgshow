@@ -1,0 +1,8 @@
+#!/bin/sh
+# wg show
+
+. /usr/lib/telegram/helpers
+
+md_code_begin
+wg show
+md_code_end

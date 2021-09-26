@@ -1,0 +1,240 @@
+#!/bin/sh
+# service that runs forever, implementing a telegram bot
+# See https://core.telegram.org/bots/api
+
+service=telegram-bot
+server="https://api.telegram.org"
+command_dir="/usr/lib/telegram/commands"
+
+# The "chat_id" from the configuration is the telegram chat that the bot will
+# send its initial start message to.
+
+###############################################################################
+
+PATH='/usr/bin:/usr/sbin:/bin:/sbin'
+
+log() {
+    echo "$*" >> ${logfile}
+    logger -p daemon.info -t "${service}" "$*"
+}
+die() { log "$*"; exit 1; }
+
+logdebug() { [ "${debug}" -gt 0 ] && echo "$*" >> ${logfile}; }
+
+
+#### telegram functions #######################################################
+
+# input params:
+#   $1 = text msg to send
+# global input variables:
+#   $msg_id, $chat_id, $url
+send() {
+	local text="$1"
+    ${curl_cmd} -X POST ${url}/sendMessage -d parse_mode=Markdown \
+    -d chat_id=${chat_id} \
+    --data-urlencode text="${text}" >> ${logfile}
+    echo >> ${logfile}
+}
+
+# input params:
+#   $1 = text msg to send
+# global input variables:
+#   $msg_id, $chat_id, $url
+#
+reply() {
+	local text="$1"
+	printf "\nREPLY to msg_id=${msg_id}:\n" >> ${logfile}
+    ${curl_cmd} -X POST ${url}/sendMessage -d parse_mode=Markdown \
+        -d chat_id=${chat_id} \
+        -d reply_to_message_id=${msg_id} \
+        --data-urlencode text="${text}" >> ${logfile}
+    echo >> ${logfile}
+}
+
+command_list() {
+    for f in $(find ${command_dir} -type f -a -perm /ugo=x | sort); do
+        local name=$(basename $f)
+        local desc=$(head -n2 $f | tail -n1 | sed -r 's/^#\s*//')
+        echo "*/${name}* ${desc}"
+    done
+}
+
+reply_help() {
+    text="
+Following commands are available:
+$(command_list)
+*/help*
+"
+    reply "${text}"
+}
+
+# global input variables:
+#   $command_dir, $cmd, $chat_id
+reply_via_script() {
+    if [ ! -x "${command_dir}${cmd}" ]; then
+        reply "unknown command: ${cmd}"
+        return 1
+    fi
+
+    # local output and assignment MUST be two separate statements or the
+    # exitcode is not captured
+    local output
+    output=$(${command_dir}${cmd} "$@")
+    logdebug "SCRIPT OUTPUT:\n${output}\n"
+    local status=$?
+    logdebug "command ${cmd} exitcode = ${status}"
+    if [ "${status}" -eq 0 ]; then
+        reply "${output}"
+        return 0
+    else
+        reply "${output}
+command failed with exitcode ${status}"
+        return 1
+    fi
+
+}
+
+longpoll() {
+	response=$(${curl_cmd} -X GET "${url}/getUpdates?offset=${offset}&timeout=${longpoll_timeout}")
+	logdebug "RESPONSE: ${response}"
+
+	status=$(jsonfilter -s "${response}" -e $.ok)
+	if [ "${status}" = 'true' ]; then
+        update_ids=$(jsonfilter -s "${response}" -e $.result[*].update_id)
+	    return 0
+	fi
+
+	# on error, sleep at little while before continuing
+	# sleep longer on 404
+	log "${response}"
+	error_code=$(jsonfilter -s "${response}" -e $.error_code)
+	[ "${error_code}" = '404' ] && sleep 3
+	sleep 2
+	# TODO exit on fatal errors?
+}
+
+# example message:
+# { "ok":true,
+#   "result":[
+#     {
+#       "update_id":290341361,
+#       "message":
+#         { "message_id":381,
+#           "from": {"id":123456789,"is_bot":false,"first_name":"Mary","language_code":"en"},
+#           "chat":{"id":123456789,"first_name":"Mary","type":"private"},
+#           "date":1632604994,
+#           "text":"/help",
+#           "entities":[{"offset":0,"length":5,"type":"bot_command"}]
+#         }
+#      }
+#   ]
+# }
+process_message() {
+    chat_id=$(jsonfilter -s "${response}" -e "$.result[@.update_id=${update_id}].message.chat.id")
+    msg_id=$(jsonfilter -s "${response}" -e "$.result[@.update_id=${update_id}].message.message_id")
+    text=$(jsonfilter -s "${response}" -e "$.result[@.update_id=${update_id}].message.text")
+    type=$(jsonfilter -s "${response}" -e "$.result[@.update_id=${update_id}].message.entities[*].type")
+
+    callback_chat_id=$(jsonfilter -s "${response}"  -e "$.result[@.update_id=${update_id}].callback_query.message.chat.id")
+    callback_id=$(jsonfilter -s "${response}" -e "$.result[@.update_id=${update_id}].callback_query.id")
+
+    logdebug "process_message() chat_id=${chat_id} msg_id=${msg_id} "
+
+    if [ "${chat_id}" != "${bot_chat_id}" ] && [ "${callback_chat_id}" != "${chat_id}" ]; then
+        log "alien sending message"
+        reply "This is a private bot"
+        ${curl_cmd} -X POST ${url}/leaveChat -d chat_id=${chat_id} >> ${logfile}
+        continue
+    fi
+
+    if [ "${type}" != "bot_command" ]; then
+        reply_help
+        continue
+    fi
+
+    set ${text}; cmd=$1; shift
+    case "${cmd}" in
+        /help)
+            reply_help ;;
+        *)
+            reply_via_script "$@"
+            ;;
+    esac
+}
+
+#### read config ##############################################################
+
+config_read() {
+    # if running on OpenWRT...
+    if command -v /sbin/uci 2>&1 >/dev/null; then
+        token=$(uci -q get ${service}.global.token)
+        bot_chat_id=$(uci -q get ${service}.global.chat_id)
+
+        longpoll_timeout=$(uci -q get ${service}.global.longpoll_timeout)
+
+        debug=$(uci -q get ${service}.global.debug)
+        logfile=$(uci -q get ${service}.global.logfile)
+        http_logfile=$(uci -q get ${service}.global.http_logfile)
+    else
+        for f in ~/.config/${service}.conf ~/.config/${service}/bot.conf ~/.${service}.conf; do
+            if [ -f ${f} ]; then
+                . ${f} || die "failed to source/read config from ${f}"
+                break
+            fi
+        done
+    fi
+
+    [ -n "${token}" ] || die "${service}.global.token is empty"
+    [ -n "${bot_chat_id}" ] || die "${service}.global.chat_id is empty"
+    [ -n "${longpoll_timeout}" ] || longpoll_timeout=120
+}
+
+#### main loop ################################################################
+
+tmpdir=/tmp/${service}
+mkdir -p ${tmpdir} || die "create ${tmpdir} failed"
+
+update_offset_file=${tmpdir}/offset
+offset=$(cat ${update_offset_file} 2>/dev/null)
+[ -n "${offset}" ] || offset=0
+
+config_read
+
+url="${server}/bot${token}"
+curl_cmd="curl --silent" # --insecure
+
+if [ -z "${logfile}" ] || [ "${logfile}" = "0" ]; then
+    logfile=/dev/null
+elif [ "${logfile}" = "1" ]; then
+    logfile=${tmpdir}/bot.log
+fi
+
+echo "\n\n====\n" >> ${logile}
+
+log "started with debug=${debug} longpoll_timeout=${longpoll_timeout} logfile=${logfile} offset=${offset}"
+
+if [ "${http_logfile}" = "1" ]; then
+    curl_cmd="${curl_cmd} --trace-ascii ${tmpdir}/http.log"
+    log "logging http to ${tmpdir}/http.log"
+    logdebug "Using curl cmdline: ${curl_cmd}"
+fi
+
+# send startup message to telegram chat
+chat_id=${bot_chat_id}
+hostname=$(cat /proc/sys/kernel/hostname)
+send "${service} on ${hostname} started"
+
+while true; do
+
+    longpoll || continue
+    [ -n "${update_ids}" ] || continue
+
+    logdebug "process ids: ${update_ids}"
+
+    for update_id in ${update_ids}; do
+        offset=$((update_id+1))
+        echo ${offset} > ${update_offset_file}
+
+        process_message
+    done
+done

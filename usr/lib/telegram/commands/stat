@@ -1,0 +1,11 @@
+#!/bin/sh
+# host status
+
+. /usr/lib/telegram/helpers
+
+. /etc/os-release && echo "${OPENWRT_RELEASE}"
+
+md_eval "uname -a"
+md_eval "uptime"
+md_title_eval "/proc/meminfo" "sed -n '1,5p' /proc/meminfo | awk '\$3==\"kB\"{\$2=rshift(\$2,10);\$3=\"MB\"} 1'"
+md_eval "df -h"

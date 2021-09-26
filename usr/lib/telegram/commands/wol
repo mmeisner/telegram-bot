@@ -1,0 +1,9 @@
+#!/bin/sh
+# etherwake MAC
+
+if [ -z "$1" ]; then
+	echo "ERROR: Missing MAC address"
+	exit 1
+fi
+
+md_eval "/usr/bin/etherwake -D -i br-lan '$1'"

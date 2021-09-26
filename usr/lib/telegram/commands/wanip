@@ -1,0 +1,4 @@
+#!/bin/sh
+# show external/WAN IP address
+
+curl -s http://whatismyip.akamai.com/

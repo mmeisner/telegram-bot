@@ -1,0 +1,8 @@
+#!/bin/sh
+# example command that echoes arguments back
+
+echo "argument were: $@"
+
+exit 0
+
+# if script exits with a non-zero exit code it will be shown in telegram chat

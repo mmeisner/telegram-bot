@@ -1,0 +1,21 @@
+#!/bin/sh
+# script markdown output helpers
+# the command scripts use these functions to format their output
+
+md_head() { printf "*$1*"; }
+
+md_code_begin() { printf "\`\`\`\n"; }
+md_code_end() { printf "\`\`\`"; }
+
+md_eval() {
+    printf "*\$ $**\n\`\`\`\n"
+    eval "$*"
+    printf "\`\`\`"
+}
+
+md_title_eval() {
+    local title=$1; shift
+    printf "*$title*\n\`\`\`\n"
+    eval "$*"
+    printf "\`\`\`"
+}

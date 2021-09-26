@@ -1,0 +1,8 @@
+#!/bin/sh
+# show active DHCP leases
+
+. /usr/lib/telegram/helpers
+
+md_code_begin
+cat /tmp/dhcp.leases | cut -f 3,4 -s -d" " | sort -t . -k 3,3n -k4,4n
+md_code_end

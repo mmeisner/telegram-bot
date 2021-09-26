@@ -1,0 +1,7 @@
+#!/bin/sh
+# netstat -nlut
+
+. /usr/lib/telegram/helpers
+
+md_eval "netstat -nlut"
+
